@@ -1,0 +1,8 @@
+; $Id$
+name = "Legislator Look-Up"
+description = "This creates a block to let users interact with Sunlight Labs \
+and Google Maps APIs to input addresses and find corresponding \
+political districts, elected officials, and other useful information."
+core = 6.x
+php = 5.1
+package = Democracy

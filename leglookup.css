@@ -1,0 +1,28 @@
+a {
+  cursor: pointer;
+}
+
+.leglookup {
+  color: #000066;
+}
+
+#look-up {
+  font-size: 150%;
+}
+
+#district {
+  font-weight: bold;
+  padding-top: 6px;
+  padding-left: 9px;
+
+}
+
+#name {
+  padding-bottom: 6px;
+  padding-left: 9px;
+}
+
+#results {
+  background-color: #EBEBEB;
+  margin: 5px;
+}

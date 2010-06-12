@@ -1,0 +1,347 @@
+<?php
+// $Id$
+/**
+ * @file
+ * Module for looking up US senators and representatives
+ */
+/**
+ * Implementation of hook_help()
+ */
+function leglookup_help($path, $arg) {
+  if ($path == 'admin/help#leglookup') {
+    $txt = 'This module enables visitors to type in '. 
+      'an address and look up the corresponding US '. 
+      'political districts and elected officials.';
+    return '<p>'. t($txt) .'</p>';
+  }
+}
+/**
+ * Implementation of hook_block()
+ */
+function leglookup_block($op = 'list', $delta = 0, $edit = array()) {
+  switch ($op) {
+    case 'list':
+      $blocks[0]['info'] = t('Legislator Look-Up');
+      return $blocks;
+    case 'view':
+      $item = leglookup_compose(); // contents of the lookup form
+      $content = theme('leglookup_frm', $item);
+      $blocks['subject'] = t('Legislator Look-Up');
+      $blocks['content'] = $content;
+      return $blocks;
+  }
+}
+/** 
+ * Implementation of hook_theme()
+ * Register theme_leglookup_form()
+ */
+function leglookup_theme() {
+  return array(
+    'leglookup_frm' => array(
+      'arguments' => array('frm' => NULL),
+    )
+  );
+}
+/**
+ * Theme function for theming the look-up form.
+ *
+ * @param $frm
+ * Results of leglookup_compose() 
+ * 
+ * legookup_compose creates the look-up form
+ * by calling drupal_get_form('leglookup_compose_form').
+ * Here, we wrap the form in <div> tags, and add 
+ * javascript to the header. If we want to apply 
+ * CSS style to the form, the style sheet would be
+ * added to the header here too.
+ */
+function theme_leglookup_frm($frm) {
+  $module_path = drupal_get_path('module', 'leglookup');
+  drupal_add_css($module_path . '/leglookup.css');
+  drupal_add_js($module_path . '/leglookup.js');
+  $opts = array('absolute' => TRUE);
+  $json_url = url('leglookup/getinfo.json', $opts);
+  drupal_add_js(
+    array('leglookup' => 
+      array("json_url" => $json_url)), 'setting');
+  $output = '<div class="leglookup" id="leglookup-form">' . $frm . '</div>';
+//  $output .= '<div class="leglookup" id="leglookup-results"></div>';
+
+  return $output;
+}
+/**
+ * Implementation of hook_menu()
+ */
+function leglookup_menu() {
+  // Callback for building the form in the Look-Up block
+  $items['leglookup/block'] = array(
+    'title' => 'Legislator Lookup',
+    'page callback' => 'leglookup_compose',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+  // Callback for actually performing the lookup, 
+  // getting latitude and longitude, then retrieving
+  // districts, then looking up the legislators, and 
+  // finally returning this data to the client as JSON.
+  $items['leglookup/getinfo.json'] = array(
+    'title' =>  'Get Legislator Info',
+    'page callback' => 'leglookup_getinfo',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+  // Pagee callback for admin/settings page
+  $items['admin/settings/leglookup'] = array(
+    'title' => 'Legislator Look-Up',
+    'page callback' => 'leglookup_admin_settings',
+    'access arguments' => 'administer legislator look-up',
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  return $items;
+}
+/**
+ * Implement hook_perm().
+ *
+ */
+function leglookup_perm() {
+  return array('administer legislator look-up');
+}
+/**
+ * admin/settings/leglookup
+ * compose settings form.
+ *
+ */
+function leglookup_admin_settings() {
+  $sb = drupal_get_form('leglookup_admin_settings_form');
+  return $sb;
+}
+/**
+ * Build settings form for admin/settings/leglookup.
+ *
+ */
+function leglookup_admin_settings_form() { 
+   // Get/set Sunlight Labs API key and
+  // Google Maps API key.
+  $form['api_keys'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('API Keys'),
+    '#weight' => 0,
+  );  
+  $form['api_keys']['sunlightlabs_key'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Sunlight Labs API Key'),
+    '#size' => 60, 
+    '#default_value' => variable_get('sunlightlabs_key', null),
+    '#description' => t('<a href="@url">Register for a Sunlight Labs API key here: @url</a>', array('@url' => 'http://services.sunlightlabs.com/api/register/')),
+  );  
+  $form['api_keys']['googlemap_api_key'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Google Maps API Key'),
+    '#size' => 60,
+    '#default_value' => variable_get('googlemap_api_key', null),
+    '#description' => t('Your personal Googlemaps API key.      You must get this for each separate website at <a href="http://www.google.com/apis/maps/">Google Map API website</a>.'),
+  );
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save Settings'),
+    '#weight' => 5,
+  );
+  return $form;
+}
+/**
+ * admin/settings/leglookup form submission handler,
+ * works like a hook.
+ *
+ */
+function leglookup_admin_settings_form_submit($form, &$form_state) {
+  // save sunlight labs key
+  variable_set('sunlightlabs_key', $form_state['values']['sunlightlabs_key']);
+  // save google maps key
+  variable_set('googlemap_api_key', $form_state['values']['googlemap_api_key']);
+}
+/**
+ * Compose a simple legislator look-up form
+ */
+function leglookup_compose() {
+  $sb = drupal_get_form('leglookup_compose_form');
+  return $sb;
+}
+
+/**
+ * Implementation of leglookup_compose_form();
+ * 
+ * Note: There is no leglookup_compose_form_submit()
+ * here because the submit button is javascript. 
+ */
+function leglookup_compose_form() {
+    // Create a fieldset
+    $form['address'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Find districts and officials'),
+      '#prefix' => '<div class="leglookup" id="leglookup-addr">',
+      '#suffix' => '</div>',
+    );
+    // Textfield for street address
+    $form['address']['street'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Street'),
+      '#size' => 22,
+      '#prefix' => '<div class="leglookup" id="leglookup-street">',
+      '#suffix' => '</div>',
+      '#description' => t('Enter your street address'),
+    );
+    // Textfield for city
+    $form['address']['city'] = array(
+      '#type' => 'textfield',
+      '#title' => t('City'),
+      '#size' => 22,
+      '#prefix' => '<div class="leglookup" id="leglookup-city">',
+      '#suffix' => '</div>',
+    );
+    // Textfield for state
+    $form['address']['state'] = array(
+      '#type' => 'textfield',
+      '#title' => t('State'),
+      '#size' => 22,
+      '#prefix' => '<div class="leglookup" id="leglookup-state">',
+      '#suffix' => '</div>',
+    );
+  /* HANDLE SUBMISSION WITH LEGLOOKUP.JS 
+    $form['address']['submit'] = array(
+      '#type' => 'submit',
+      '#value' => 'Look Up',
+    );  */ 
+  return $form;
+}
+/** 
+ * MOVED SUBMISSION HANDLER TO LEGLOOKUP.JS
+ * Form submission handler (functions
+ * like a hook)
+ *
+function leglookup_compose_form_submit($form, &$form_state) {
+  $form_state['redirect'] = ""; // Return user to same page
+}  */
+/**
+ * @return
+ * JSON data.
+ * 
+ * leglookup_getinfo(), includes 4 main steps:
+ * 1. Use the Google API to look up latitude and longitude coordinates
+ *    for the address entered by the user and passed through the URI.
+ *    Read more about using Google's geocode service:
+ *    http://code.google.com/apis/maps/documentation/geocoding/index.html
+ *    Here's a great example from Google:
+ *    http://code.google.com/support/bin/answer.py?answer=80200&topic=11364
+ *
+ * 2. Pass the lat and lng coordinates to Sunlight Labs' API to look 
+ *    up the cooresponding political districts.
+ *    See Sunlight
+ *    labs documentation at:
+ *    http://wiki.sunlightlabs.com/Sunlight_API_Documentation
+ *    Here's the basic's:
+ *    http://services.sunlightlabs.com/api/api.method.format?apikey=YOUR_API_KEY&params
+ *    To get disctucts use districts.getDistrictsFromLatLng
+ *
+ * 3. Then send those districts back to Sunlight Labs to look up 
+ *    the corresponding elected officials.
+ *
+ * 4. Send back district and legislator information as JSON, for display
+ *    by the Legislator Look-Up block.
+ *
+ */
+function leglookup_getinfo() { 
+  // Get keys
+  $google_key = variable_get('googlemap_api_key', null);
+  $sunlightlabs_key = variable_get('sunlightlabs_key', null);
+
+  // Get latitude and longitude coordinates from Google
+  define("MAPS_HOST", "maps.google.com");
+
+  // Initialize delay in geocode speed
+  $delay = 0;
+  $base_url = "http://" . MAPS_HOST . "/maps/geo?output=xml" . "&key=" . $google_key;
+
+  // Check $_GET for address. 
+  if ($_GET['addr'] && $_GET['city'] && $_GET['st']) {
+
+  // Loop upto 10 times to geocode the address
+  $geocode_pending = true;
+  $i=0;
+  while($geocode_pending && $i<10) {
+
+    // Geocode address
+    $address = $_GET['addr'] . ", " . $_GET['city'] . ", " . $_GET['st'];
+    $request_url = $base_url . "&q=" . urlencode($address);
+    $xml = simplexml_load_file($request_url) or die ("url not loading");
+
+      $status = $xml->Response->Status->code;
+      if (strcmp($status, "200") == 0) {
+        // Successful geocode
+        $geocode_pending = false;
+        $coordinates = $xml->Response->Placemark->Point->coordinates;
+        $coordinatesSplit = split(",", $coordinates);
+        // Format: Longitude, Latitude
+        $lat = $coordinatesSplit[1];
+        $lng = $coordinatesSplit[0];
+      } else if (strcmp($status, "620") == 0) {
+        // sent geocodes too fast
+        $delay += 100000;
+      } else {
+        // failure to geocode
+        $geocode_pending=false;
+        echo "Address" . $address . "failed to geocode. ";
+        echo "Received status " . $status . " \n";
+      }
+    usleep($delay);
+  }
+
+  // Now use Lat and Lng coordinates to retrieve district information from Sunlight Labs. 
+  // Use districts.getDistrictsFromLatLng
+  $request_url = "http://services.sunlightlabs.com/api/districts.getDistrictFromLatLong.xml?&apikey=$sunlightlabs_key&latitude=$lat&longitude=$lng";
+  $xml = simplexml_load_file($request_url) or die ("url not loading: $request_url");
+  $state = $xml->districts->district->state;
+  $number = $xml->districts->district->number;
+
+  // Now use Sunlight Labs' district info to look up legislators
+  // Use legislators.getList
+  // Get senators and reps separately 
+  // For senators, parameters are state=$state and title=Sen.
+  $request_url = "http://services.sunlightlabs.com/api/legislators.getList.xml?&apikey=$sunlightlabs_key&state=$state&title=Sen";
+  $xml = simplexml_load_file($request_url) or die ("url not loading: $request_url");
+  // Build JSON
+  $json .= '{ "legislators": [ ';
+    // Iterate through xml to return senators
+    Foreach ($xml->legislators->legislator as $legislator) {
+      $json .= sprintf(
+        '{ "state": "%s", "district": "%s", "party": "%s", "title": "%s", "firstname": "%s", "lastname": "%s" }, ',
+        $state,
+        $legislator->district,
+        $legislator->party,
+	$legislator->title,
+        $legislator->firstname,
+        $legislator->lastname
+      );
+    }
+  // Now get US representatives
+  // For House representatives, parameters are state=$statee and district=$number.
+  $request_url = "http://services.sunlightlabs.com/api/legislators.getList.xml?&apikey=$sunlightlabs_key&state=$state&district=$number";
+  $xml = simplexml_load_file($request_url) or die ("url not loading: $request_url");
+    Foreach ($xml->legislators->legislator as $legislator) {
+      $json .= sprintf(
+        '{ "state": "%s", "district": "%s", "party": "%s", "title": "%s", "firstname": "%s", "lastname": "%s" } ',
+        $state,
+        $legislator->district,
+        $legislator->party,
+	$legislator->title,
+        $legislator->firstname,
+        $legislator->lastname
+      );
+    }
+  $json .= '] }';
+
+  drupal_set_header('Content-Type: text/plain; charset: utf-8');
+  print($json);
+
+}
+}
